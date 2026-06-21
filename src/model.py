@@ -4,12 +4,12 @@ from transformers import Trainer
 from src.utils import ComboDiceFocalLoss
 
 
-def get_segformer_model(checkpoint: str = "nvidia/mit-b3", num_classes: int = 32):
+def get_segformer_model(checkpoint="nvidia/mit-b3", num_classes = 32):
     """
     Instancie et configure le modèle SegFormer pour la segmentation sémantique.
     """
     model = SegformerForSemanticSegmentation.from_pretrained(
-        checkpoint, 
+        pretrained_model_name_or_path=checkpoint, 
         num_labels=num_classes, 
         ignore_mismatched_sizes=True
     )
@@ -19,12 +19,12 @@ def get_segformer_model(checkpoint: str = "nvidia/mit-b3", num_classes: int = 32
 class SegmentationTrainer(Trainer):
     def __init__(self, *args, num_classes=32, **kwargs):
         """
-        Trainer personnalisé optimisé : instancie la fonction de perte une seule fois.
+        Définition d'un Trainer personnalisé pour la segmentation sémantique avec SegFormer.
         """
         super().__init__(*args, **kwargs)
         self.num_classes = num_classes
         
-        # Instanciation unique de la fonction de perte pour préserver le GPU
+        # Instanciation de la fonction de perte 
         self.loss_fn = ComboDiceFocalLoss(
             num_classes=self.num_classes, 
             gamma=2.0, 
