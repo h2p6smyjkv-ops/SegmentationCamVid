@@ -108,6 +108,9 @@ def compute_metrics(eval_pred, num_classes=32):
 
 
 def evaluate_model(model, test_loader, num_classes=32, device=None):
+    """
+    Évalue le modèle sur le jeu de test et calcule le mIoU.
+    """
 
     if device is None:
         device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
@@ -116,7 +119,7 @@ def evaluate_model(model, test_loader, num_classes=32, device=None):
     model.to(device)
     model.eval()
     
-    # Initialisation de la métrique IoU (Jaccard Index) macro pour le mIoU
+    # Initialisation de la métrique IoU macro pour le mIoU
     miou_metric = MulticlassJaccardIndex(num_classes=num_classes, average='macro', ignore_index=255).to(device)
     
     print(f"Démarrage de l'évaluation")
@@ -143,8 +146,6 @@ def evaluate_model(model, test_loader, num_classes=32, device=None):
             outputs = model(images)
             # Récupération des logits (gère les sorties brutes ou les objets complexes)
             logits = outputs.logits if hasattr(outputs, 'logits') else outputs
-            # REDIMENSIONNEMENT CRITIQUE : Aligner la taille des logits sur celle des masques
-            # Passe de [4, 32, 128, 128] à [4, 32, 512, 512]
 
             upsampled_logits = F.interpolate(
                 logits, 
