@@ -19,7 +19,7 @@ class MulticlassDiceLoss(nn.Module):
     def forward(self, logits, targets):
         probs = F.softmax(logits, dim=1)
         
-        mask_valid = (targets != self.ignore_index)
+        mask_valid = (targets != self.ignore_index) & (targets != 30)
         targets_clean = targets.clone()
         targets_clean[~mask_valid] = 0
         
