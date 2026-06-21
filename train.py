@@ -1,18 +1,15 @@
 import os
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from transformers import (
     SegformerImageProcessor, 
     TrainingArguments, 
-    Trainer,
     EarlyStoppingCallback
 )
 import matplotlib.pyplot as plt
-
 from src.dataset import CamVidDataset  
-from src.model import get_segformer_model
-from src.utils import ComboDiceFocalLoss, compute_metrics
+from src.model import get_segformer_model, SegmentationTrainer
+from src.utils import compute_metrics
+
 
 # 🛡️ SÉCURITÉ MULTI-GPU : On force l'utilisation du GPU numéro 0 uniquement
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -58,28 +55,10 @@ print(f"Images d'entraînement : {len(train_dataset)} | Images de validation : {
 # ==========================================
 model = get_segformer_model(checkpoint=CHECKPOINT, num_classes=NUM_CLASSES)
 
-# ==========================================
-# 4. TRAINER PERSONNALISÉ 
-# ==========================================
-class SegmentationTrainer(Trainer):
-    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-        labels = inputs.get("labels").long()
-        outputs = model(**inputs)
-        logits = outputs.get("logits")
-        
-        # Redimensionnement des logits à la taille originale de l'image
-        upsampled_logits = F.interpolate(
-            logits, size=labels.shape[1:], mode='bilinear', align_corners=False
-        )
-        
-        # Calcul de la nouvelle perte combinée (Dice + Focal) importée de src.utils
-        loss_fn = ComboDiceFocalLoss(num_classes=NUM_CLASSES, gamma=2.0, ignore_index=255).to(logits.device)
-        total_loss = loss_fn(upsampled_logits, labels)
-        
-        return (total_loss, outputs) if return_outputs else total_loss
+
 
 # ==========================================
-# 5. CONFIGURATION DU GESTIONNAIRE D'ENTRAÎNEMENT
+# 4. CONFIGURATION DU GESTIONNAIRE D'ENTRAÎNEMENT
 # ==========================================
 training_args = TrainingArguments(
     output_dir="./results_segformer", 
@@ -111,14 +90,16 @@ trainer = SegmentationTrainer(
     train_dataset=train_dataset, 
     eval_dataset=val_dataset,            
     compute_metrics=compute_metrics, 
-    callbacks=[EarlyStoppingCallback(early_stopping_patience=15)] 
+    callbacks=[EarlyStoppingCallback(early_stopping_patience=15)],
+    num_classes=NUM_CLASSES,
+                
 )
 
 # ==========================================
-# 6. ENTRAÎNEMENT ET COURBES
+# 5. ENTRAÎNEMENT ET COURBES
 # ==========================================
 if __name__ == "__main__":
-    print("Démarrage de l'entraînement supérieur sur GPU avec Combo Loss...")
+    print("Démarrage de l'entraînement")
     trainer.train()
     
     print("Extraction et sauvegarde du meilleur modèle...")
