@@ -1,8 +1,10 @@
-venv/
+.venv/
+.vscode/
 __pycache__/
 .ipynb_checkpoints/
 results_segformer/
-mon_modele_final/
+model/
+modelBis/
 videos/
 temp_files/
 videos/
@@ -10,3 +12,8 @@ __pycache__/
 .DS_Store
 CamVid/
 *.png
+model/
+runs/
+*.mlpackage/
+*.mov
+*.csv
