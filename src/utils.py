@@ -7,9 +7,58 @@ from torchmetrics.classification import MulticlassJaccardIndex
 
 metric = evaluate.load("mean_iou")
 
-class MulticlassCrossEntropyLoss(nn.Module):
+
+class GeneralizedDiceLoss(nn.Module):
     """
-    Implementation de la Cross Entropy Loss pour la segmentation multi-classes.
+    Implémentation de la Generalized Dice Loss 
+    """
+    def __init__(self, num_classes, ignore_index=255, epsilon=1e-6):
+        super().__init__()
+        self.num_classes = num_classes
+        self.ignore_index = ignore_index
+        self.epsilon = epsilon
+
+    def forward(self, logits, targets):
+        # 1. Conversion des logits en probabilités via Softmax
+        probs = F.softmax(logits, dim=1)  # Shape: [Batch, Classes, H, W]
+        
+        # 2. Masquage des pixels invalides (votre logique métier CamVid)
+        mask_valid = (targets != self.ignore_index) & (targets != 30) # Shape: [Batch, H, W]
+        targets_clean = targets.clone()
+        targets_clean[~mask_valid] = 0
+        
+        # 3. Conversion des targets en One-Hot encoding
+        targets_one_hot = F.one_hot(targets_clean, num_classes=self.num_classes)
+        targets_one_hot = targets_one_hot.permute(0, 3, 1, 2).float() # Shape: [Batch, Classes, H, W]
+        
+        # 4. Application du masque d'exclusion sur les probabilités et les targets
+        mask_valid = mask_valid.unsqueeze(1) # Shape: [Batch, 1, H, W]
+        probs = probs * mask_valid
+        targets_one_hot = targets_one_hot * mask_valid
+
+        # 5. Somme sur les dimensions spatiales (Batch, Hauteur, Largeur) pour chaque classe
+        dims = (0, 2, 3)
+        intersection = torch.sum(probs * targets_one_hot, dim=dims) # Shape: [Classes]
+        cardinality = torch.sum(probs + targets_one_hot, dim=dims)   # Shape: [Classes]
+        
+        # 6. Calcul des poids de généralisation : w_l = 1 / (somme des pixels de la classe l)^2
+        # On ajoute epsilon pour éviter la division par zéro sur les classes absentes du batch
+        volumes = torch.sum(targets_one_hot, dim=dims)
+        weights = 1.0 / (volumes ** 2 + self.epsilon)
+        
+        # 7. Calcul du score Dice Généralisé pondéré
+        numerator = 2.0 * torch.sum(weights * intersection)
+        denominator = torch.sum(weights * cardinality)
+        
+        generalized_dice_score = (numerator + self.epsilon) / (denominator + self.epsilon)
+        
+        # Retourne la perte à minimiser (0 = prédiction parfaite, 1 = aucune intersection)
+        return 1.0 - generalized_dice_score
+
+
+class CrossEntropyLoss(nn.Module):
+    """
+    Implementation de la Cross Entropy Loss.
     """
     def __init__(self, ignore_index=255):
         super().__init__()
@@ -28,9 +77,9 @@ class MulticlassCrossEntropyLoss(nn.Module):
         return ce_loss[mask_valid].mean()
 
 
-class MulticlassDiceLoss(nn.Module):
+class DiceLoss(nn.Module):
     """
-    Implementation de la Dice Loss pour la segmentation multi-classes.
+    Implementation de la Dice Loss 
     """
     def __init__(self, num_classes, ignore_index=255):
         super().__init__()
@@ -58,7 +107,7 @@ class MulticlassDiceLoss(nn.Module):
         return 1.0 - dice_score.mean()
 
 
-class MulticlassFocalLoss(nn.Module):
+class FocalLoss(nn.Module):
     """
     Implementation de la Focal Loss pour la segmentation multi-classes.
     """
@@ -86,18 +135,18 @@ class MulticlassFocalLoss(nn.Module):
         return focal_loss[mask_valid].mean()
 
 
-class ComboDiceFocalLoss(nn.Module):
+class ComboLoss(nn.Module):
     """
-    Combine la Dice Loss et la Focal Loss de manière équilibrée.
+    Combine 2 fonctions de perte.
     """
     def __init__(self, num_classes, gamma=2.0, ignore_index=255):
         super().__init__()
-        self.dice = MulticlassDiceLoss(num_classes, ignore_index)
-        #self.focal = MulticlassFocalLoss(num_classes, gamma, ignore_index)
-        self.ce = MulticlassCrossEntropyLoss(ignore_index)
+        self.gdice = GeneralizedDiceLoss(num_classes, ignore_index)
+        self.focal = FocalLoss(num_classes, gamma, ignore_index)
+        
 
     def forward(self, logits, targets):
-        dice_loss = self.dice(logits, targets)
+        dice_loss = self.gdice(logits, targets)
         #focal_loss = self.focal(logits, targets)
         ce_loss = self.ce(logits, targets)
 
