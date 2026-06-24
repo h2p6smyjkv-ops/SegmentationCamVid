@@ -16,8 +16,7 @@ class CamVidDataset(Dataset):
         self.is_train = is_train
 
         # Pipeline d'ENTRAÎNEMENT : Augmentations géométriques et colorimétriques
-        self.train_transform = A.Compose([
-            A.Resize(height=512, width=512), 
+        self.train_transform = A.Compose([ 
             A.HorizontalFlip(p=0.5), 
             
             # Changements de lumière 
@@ -37,9 +36,6 @@ class CamVidDataset(Dataset):
         ])
 
         
-        self.val_transform = A.Compose([
-            A.Resize(height=512, width=512), # Force la même résolution que le Train
-        ])
 
     def _load_color_mapping(self, csv_path):
         mapping = {}
