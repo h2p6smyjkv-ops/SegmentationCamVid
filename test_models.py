@@ -6,30 +6,21 @@ import coremltools as ct
 from transformers import SegformerImageProcessor
 from torch.utils.data import DataLoader
 from torchmetrics.classification import MulticlassJaccardIndex
-
+from src.utils import evaluate_model
 from src.dataset import CamVidDataset  
 from src.model import get_segformer_model
 
+# Configuration du périphérique de calcul
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
 def sync_device(device):
     if device.type == "mps":
         torch.mps.synchronize()
-    elif device.type == "cuda":
-        torch.cuda.synchronize()
 
-NUM_CLASSES = 32
-CHECKPOINT = "nvidia/mit-b3"
-
-OUTPUT_CSV = "test_models.csv"  
-
-PATH_TEST = "./../CarSegm/CamVid"
-PATH_TO_CSV  = os.path.join(PATH_TEST, "class_dict.csv")
-PATH_TEST_IMG = os.path.join(PATH_TEST, "test")
-PATH_TEST_MSK = os.path.join(PATH_TEST, "test_labels")
 
 def get_class_names(csv_path):
+    """Récupère les noms des classes depuis le fichier CSV de configuration."""
     class_names = []
     with open(csv_path, mode='r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
@@ -37,88 +28,78 @@ def get_class_names(csv_path):
             class_names.append(row['name'])
     return class_names
 
-print("Lecture des noms de classes...")
-class_names_list = get_class_names(PATH_TO_CSV)
 
-if len(class_names_list) < NUM_CLASSES:
-    class_names_list += [f"Class_{i:02d}" for i in range(len(class_names_list), NUM_CLASSES)]
+# ==========================================
+# 1. CONFIGURATION ET CHEMINS DES DOSSIERS
+# ==========================================
+NUM_CLASSES = 32
+CHECKPOINT = "nvidia/mit-b3"
+OUTPUT_CSV = "test_models.csv"  
+PATH_TEST = "./CamVid"
+PATH_TO_CSV  = os.path.join(PATH_TEST, "class_dict.csv")
+PATH_TEST_IMG = os.path.join(PATH_TEST, "test")
+PATH_TEST_MSK = os.path.join(PATH_TEST, "test_labels")
 
-print("Chargement du jeu de données Test...")
+
+# ==========================================
+# 2. PRÉPARATION DES DONNÉES ET MÉTRIQUES
+# ==========================================
+
 processor = SegformerImageProcessor.from_pretrained(CHECKPOINT)
+metric = MulticlassJaccardIndex(num_classes=NUM_CLASSES, average='none', ignore_index=255).to(DEVICE)
 
 test_dataset = CamVidDataset(
     images_dir=PATH_TEST_IMG, masks_dir=PATH_TEST_MSK, csv_path=PATH_TO_CSV, processor=processor, is_train=False  
 )
 test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False) 
 
-model_pytorch = None
-model_coreml = None
-framework_used = ""
 
-if os.path.exists("./../CarSegm/model_CoreML.mlpackage"):
+# ==========================================
+# 3. CHARGEMENT DU MODÈLE (PyTorch ou CoreML)
+# ==========================================
+choix = input("Frameworks: 1=CoreML, 2=PyTorch | Choix : ").strip()
+model = None
+
+
+if choix == "1" and os.path.exists("./model_CoreML.mlpackage"):
     try:
-        print("Modèle CoreML détecté. Initialisation...")
-        model_coreml = ct.models.MLModel("./../CarSegm/model_CoreML.mlpackage")
-        framework_used = "CoreML"
-    except Exception as e:
-        print(f" Erreur lors du chargement de CoreML ({e}). Bascule sur PyTorch...")
-        model_coreml = None
+        model = ct.models.MLModel("./model_CoreML.mlpackage")
+        print("Modèle CoreML chargé avec succès.")
+    except Exception:
+        print("Erreur CoreML, repli sur PyTorch.")
 
-if model_coreml is None:
-    print(" Modèle CoreML absent ou défaillant. Initialisation du modèle PyTorch...")
-    model_pytorch = get_segformer_model(checkpoint="./../CarSegm/model", num_classes=NUM_CLASSES)
-    model_pytorch.to(DEVICE)
-    model_pytorch.eval()
-    framework_used = "PyTorch (Original)"
+if choix == "2" or model is None:
+    model = get_segformer_model(checkpoint="./model", num_classes=NUM_CLASSES)
+    model.to(DEVICE).eval()
+    print("Modèle PyTorch chargé avec succès.")
 
-metric_macro = MulticlassJaccardIndex(num_classes=NUM_CLASSES, average='macro', ignore_index=255).to(DEVICE)
-metric_per_class = MulticlassJaccardIndex(num_classes=NUM_CLASSES, average='none', ignore_index=255).to(DEVICE)
 
-print(f"\n" + "="*50)
-print(f"Démarrage de l'évaluation avec : {framework_used}")
-metric_macro.reset()
-metric_per_class.reset()
+# ==========================================
+# 4. EXÉCUTION DE L'ÉVALUATION
+# ==========================================
+print("\nDémarrage de l'évaluation du modèle...")
+if choix == "1":
+    iou_per_class, miou_global = evaluate_model(model, test_loader, DEVICE, is_coreml=True)
+    print(f" Évaluation terminée | mIoU Global: {miou_global*100:.2f}%")
+else:
+    iou_per_class, miou_global = evaluate_model(model, test_loader, DEVICE, is_coreml=False)
+    print(f" Évaluation terminée | mIoU Global: {miou_global*100:.2f}%")
 
-with torch.no_grad():
-    for batch in test_loader:
-        if isinstance(batch, dict):
-            images_torch = batch.get("pixel_values")
-            masks_torch = batch.get("labels").to(DEVICE).long()
-        else:
-            images_torch, masks_torch = batch, batch.to(DEVICE).long()
-            
-        if model_coreml is not None:
-            np_images = images_torch.cpu().numpy()
-            coreml_inputs = {"pixel_values": np_images}
-            predictions = model_coreml.predict(coreml_inputs)
-            output_key = list(predictions.keys())[0]
-            logits_np = predictions[output_key]
-            logits_torch = torch.from_numpy(logits_np).to(DEVICE)
-            
-        else:
-            images_gpu = images_torch.to(DEVICE)
-            outputs = model_pytorch(images_gpu)
-            logits_torch = outputs.logits if hasattr(outputs, 'logits') else outputs
 
-        upsampled_logits = torch.nn.functional.interpolate(
-            logits_torch, size=masks_torch.shape[1:], mode='bilinear', align_corners=False
-        )
-        preds = torch.argmax(upsampled_logits, dim=1)
-        
-        metric_macro.update(preds, masks_torch)
-        metric_per_class.update(preds, masks_torch)
-
-miou_global = metric_macro.compute().item()
-iou_per_class = metric_per_class.compute().cpu().numpy()
-
-print(f" Évaluation terminée | mIoU Global: {miou_global*100:.2f}%")
-
+# ==========================================
+# 5. ÉCRITURE DES RÉSULTATS DANS UN FICHIER CSV
+# ==========================================
 print(f"\nEnregistrement des résultats épurés dans {OUTPUT_CSV}...")
 
-headers = ["Metric", "Framework", "Score_Raw", "Score_Percentage"]
+# Récupération et ajustement des noms de classes
+class_names_list = get_class_names(PATH_TO_CSV)
+if len(class_names_list) < NUM_CLASSES:
+    class_names_list += [f"Class_{i:02d}" for i in range(len(class_names_list), NUM_CLASSES)]
 
+# Structuration des lignes du fichier CSV
+headers = ["Metric", "Score_Raw", "Score_Percentage"]
 rows = [
-    ["mIoU Global", framework_used, f"{miou_global:.4f}", f"{miou_global * 100:.2f}%"],
+    ["mIoU Global", f"{miou_global:.4f}", f"{miou_global * 100:.2f}%"],
 ]
 
 for class_idx in range(NUM_CLASSES):
@@ -127,14 +108,14 @@ for class_idx in range(NUM_CLASSES):
     
     rows.append([
         class_name, 
-        framework_used, 
         f"{val_raw:.4f}", 
         f"{val_raw * 100:.2f}%"
     ])
 
+# Écriture physique du fichier
 with open(OUTPUT_CSV, mode="w", newline="", encoding="utf-8") as f:
     writer = csv.writer(f, delimiter=";")
     writer.writerow(headers)
     writer.writerows(rows)
 
-print("Banc d'essai CamVid finalisé avec succès !")
+print("Test finalisé avec succès !")

@@ -1,21 +1,58 @@
 import os
 import torch
+import torch.nn.functional as F
 from transformers import (
     SegformerImageProcessor, 
     TrainingArguments, 
-    EarlyStoppingCallback
+    EarlyStoppingCallback,
+    Trainer
 )
 import matplotlib.pyplot as plt
 from src.dataset import CamVidDataset  
-from src.model import get_segformer_model, SegmentationTrainer
+from src.model import get_segformer_model
 from src.utils import compute_metrics
+from src.utils import combo_loss
 
-
-# 🛡️ SÉCURITÉ MULTI-GPU : On force l'utilisation du GPU numéro 0 uniquement
+# SÉCURITÉ MULTI-GPU : On force l'utilisation du GPU numéro 0 uniquement
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # ==========================================
-# 1. CHEMINS VERS LES DOSSIERS (TRAIN & VAL)
+# 1. DEFINITION DE LA CLASSE TRAINER
+# ==========================================
+
+class SegmentationTrainer(Trainer):
+    """
+    Trainer personnalisé pour une loss function personnalisée.
+    """
+    def __init__(self, *args, num_classes=32, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.num_classes = num_classes
+
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        # 1. Extraction des données et propagation avant (Forward)
+        labels = inputs.get("labels").long()
+        outputs = model(**inputs)
+        logits = outputs.get("logits")
+        
+        # 2. Redimensionnement des logits à la taille originale du masque 
+        upsampled_logits = F.interpolate(
+            logits, size=labels.shape[1:], mode='bilinear', align_corners=False
+        )
+        
+        # 3. Calcul direct de la perte 
+        total_loss = combo_loss(
+            logits=upsampled_logits, 
+            targets=labels, 
+            num_classes=self.num_classes, 
+            gamma=2.0, 
+            ignore_index=255
+        )
+        
+        return (total_loss, outputs) if return_outputs else total_loss
+
+
+# ==========================================
+# 2. CHEMINS VERS LES DOSSIERS (TRAIN & VAL)
 # ==========================================
 KAGGLE_PATH = "/kaggle/input/datasets/carlolepelaars/camvid/CamVid" 
 LOCAL_PATH = "./CamVid"
@@ -37,7 +74,7 @@ CHECKPOINT = "nvidia/mit-b3"
 NUM_CLASSES = 32
 
 # ==========================================
-# 2. INSTANCIATION DES DATASETS (TRAIN & VAL)
+# 3. INSTANCIATION DES DATASETS (TRAIN & VAL)
 # ==========================================
 processor = SegformerImageProcessor.from_pretrained(CHECKPOINT)
 
@@ -51,14 +88,14 @@ val_dataset = CamVidDataset(
 print(f"Images d'entraînement : {len(train_dataset)} | Images de validation : {len(val_dataset)}")
 
 # ==========================================
-# 3. INSTANCIATION DU MODÈLE VIA SRC
+# 4. INSTANCIATION DU MODÈLE 
 # ==========================================
 model = get_segformer_model(checkpoint=CHECKPOINT, num_classes=NUM_CLASSES)
 
 
 
 # ==========================================
-# 4. CONFIGURATION DU GESTIONNAIRE D'ENTRAÎNEMENT
+# 5. CONFIGURATION DU GESTIONNAIRE D'ENTRAÎNEMENT
 # ==========================================
 training_args = TrainingArguments(
     output_dir="./results_segformer", 
@@ -96,7 +133,7 @@ trainer = SegmentationTrainer(
 )
 
 # ==========================================
-# 5. ENTRAÎNEMENT ET COURBES
+# 6. ENTRAÎNEMENT ET COURBES
 # ==========================================
 if __name__ == "__main__":
     print("Démarrage de l'entraînement")
@@ -115,9 +152,9 @@ if __name__ == "__main__":
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 15))
     
     ax1.plot(train_steps, train_loss, label="Train Loss", color="blue", alpha=0.6)
-    ax1.set_xlabel("Steps (Étapes de calcul)")
+    ax1.set_xlabel("Steps")
     ax1.set_ylabel("Loss")
-    ax1.set_title("Évolution de la Perte d'Entraînement (Train Loss)")
+    ax1.set_title("Évolution de la Perte d'Entraînement")
     ax1.legend()
     ax1.grid(True)
     
@@ -128,15 +165,15 @@ if __name__ == "__main__":
 
     if val_loss and val_steps:
         ax2.plot(val_steps, val_loss, label="Validation Loss", color="orange", marker="o")
-    ax2.set_xlabel("Steps (Étapes de calcul)")
+    ax2.set_xlabel("Steps")
     ax2.set_ylabel("Loss")
-    ax2.set_title("Évolution de la Perte de Validation (Validation Loss)")
+    ax2.set_title("Évolution de la Perte de Validation")
     ax2.legend()
     ax2.grid(True)
     
     if val_iou and val_steps:
         ax3.plot(val_steps, val_iou, label="Validation Mean IoU", color="green", marker="s")
-    ax3.set_xlabel("Steps (Étapes de calcul)")
+    ax3.set_xlabel("Steps ")
     ax3.set_ylabel("Mean IoU")
     ax3.set_title("Évolution du Mean IoU")
     ax3.legend()

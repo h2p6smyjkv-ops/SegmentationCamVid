@@ -4,99 +4,93 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchmetrics.classification import MulticlassJaccardIndex
 
-
-metric = MulticlassJaccardIndex(
+#Définition des métriques globales et par classe pour l'évaluation
+metric_global = MulticlassJaccardIndex(
     num_classes=32, 
     average='macro', 
     ignore_index=255
 )
 
+metric_per_class = MulticlassJaccardIndex(
+    num_classes=32, 
+    average='none', 
+    ignore_index=255
+)
 
-class DiceLoss(nn.Module):
+
+def dice_loss(logits, targets, num_classes, ignore_index=255):
     """
-    Implementation de la Dice Loss.
+    Calcule la Dice Loss entre les prédictions (logits) et les cibles (targets).
     """
-    def __init__(self, num_classes, ignore_index=255):
-        super().__init__()
-        self.num_classes = num_classes
-        self.ignore_index = ignore_index
+    probs = F.softmax(logits, dim=1)
+    
+    # Filtrage des pixels à ignorer
+    mask_valid = (targets != ignore_index)
+    targets_clean = targets.clone()
+    targets_clean[~mask_valid] = 0
+    
+    # Encodage One-Hot des étiquettes
+    targets_one_hot = F.one_hot(targets_clean, num_classes=num_classes).permute(0, 3, 1, 2).float()
+    
+    # Application du masque de validité
+    mask_valid = mask_valid.unsqueeze(1)
+    probs = probs * mask_valid
+    targets_one_hot = targets_one_hot * mask_valid
 
-    def forward(self, logits, targets):
-        probs = F.softmax(logits, dim=1)
-        
-        mask_valid = (targets != self.ignore_index)
-        targets_clean = targets.clone()
-        targets_clean[~mask_valid] = 0
-        
-        targets_one_hot = F.one_hot(targets_clean, num_classes=self.num_classes).permute(0, 3, 1, 2).float()
-        
-        mask_valid = mask_valid.unsqueeze(1)
-        probs = probs * mask_valid
-        targets_one_hot = targets_one_hot * mask_valid
-
-        dims = (0, 2, 3)
-        intersection = torch.sum(probs * targets_one_hot, dim=dims)
-        cardinality = torch.sum(probs + targets_one_hot, dim=dims)
-        
-        dice_score = (2. * intersection + 1e-6) / (cardinality + 1e-6)
-        return 1.0 - dice_score.mean()
-
+    # Réduction sur le batch, la hauteur et la largeur
+    dims = (0, 2, 3)
+    intersection = torch.sum(probs * targets_one_hot, dim=dims)
+    cardinality = torch.sum(probs + targets_one_hot, dim=dims)
+    
+    # Calcul du score et de la perte
+    dice_score = (2. * intersection + 1e-6) / (cardinality + 1e-6)
+    return 1.0 - dice_score.mean()
 
 
-class FocalLoss(nn.Module):
+
+def focal_loss(logits, targets, gamma=2.0, ignore_index=255):
     """
-    Implémentation de la Focal Loss 
+    Calcule la Focal Loss entre les prédictions (logits) et les cibles (targets).
     """
-    def __init__(self, num_classes, gamma=2.0, ignore_index=255):
-        super().__init__()
-        self.num_classes = num_classes
-        self.gamma = gamma
-        self.ignore_index = ignore_index
-
-    def forward(self, logits, targets):
-        # 1. Calcul de la Cross Entropy classique pixel par pixel (sans réduction)
-        ce_loss = F.cross_entropy(
-            logits, 
-            targets, 
-            ignore_index=self.ignore_index, 
-            reduction='none'
-        )
+    # 1. Calcul de la Cross Entropy classique pixel par pixel (sans réduction)
+    ce_loss = F.cross_entropy(
+        logits, 
+        targets, 
+        ignore_index=ignore_index, 
+        reduction='none'
+    )
+    
+    # 2. Calcul de pt : la probabilité que le modèle a attribuée à la BONNE classe
+    pt = torch.exp(-ce_loss)
+    
+    # 3. Application de la formule mathématique de la Focal Loss : (1 - pt)^gamma * CE
+    focal_loss_value = ((1 - pt) ** gamma) * ce_loss
+    
+    # 4. Création du masque pour ne calculer la moyenne que sur les pixels valides (!= ignore_index)
+    mask_valid = (targets != ignore_index)
+    
+    # Sécurité si le batch ne contient aucun pixel valide
+    if mask_valid.sum() == 0:
+        return torch.tensor(0.0, device=logits.device)
         
-        # 2. Calcul de pt : la probabilité que le modèle a attribuée à la BONNE classe
-        pt = torch.exp(-ce_loss)
-        
-        # 3. Application de la formule mathématique de la Focal Loss : (1 - pt)^gamma * CE
-        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
-        
-        # 4. Création du masque pour ne calculer la moyenne que sur les pixels valides (!= 255)
-        mask_valid = (targets != self.ignore_index)
-        
-        # Sécurité si le batch ne contient aucun pixel valide (très rare)
-        if mask_valid.sum() == 0:
-            return torch.tensor(0.0, device=logits.device)
-            
-        # 5. Retourne la moyenne de la perte uniquement sur les pixels valides
-        return focal_loss[mask_valid].mean()
+    # 5. Retourne la moyenne de la perte uniquement sur les pixels valides
+    return focal_loss_value[mask_valid].mean()
 
 
-
-class ComboLoss(nn.Module):
+def combo_loss(logits, targets, num_classes, gamma=2.0, ignore_index=255, weight_dice=0.5, weight_focal=0.5):
     """
-    Combine la Dice Loss et la Focal Loss.
+    Combine la Dice Loss et la Focal Loss 
     """
-    def __init__(self, num_classes, gamma=2.0, ignore_index=255):
-        super().__init__()
-        self.dice = DiceLoss(num_classes, ignore_index)
-        self.focal = FocalLoss(num_classes, gamma=2.0, ignore_index=ignore_index)
-
-    def forward(self, logits, targets):
-        dice_loss = self.dice(logits, targets)
-        focal_loss = self.focal(logits, targets)
-
-        return 0.5 * dice_loss + 0.5 * focal_loss
+    # Appel des deux fonctions indépendantes
+    d_loss = dice_loss(logits, targets, num_classes=num_classes, ignore_index=ignore_index)
+    f_loss = focal_loss(logits, targets, gamma=gamma, ignore_index=ignore_index)
+    
+    # Combinaison linéaire des deux pertes
+    return (weight_dice * d_loss) + (weight_focal * f_loss)
 
 
-def compute_metrics(eval_pred, num_classes=32):
+
+def compute_metrics(eval_pred):
     """
     Calcule le mIoU.
     """
@@ -104,7 +98,7 @@ def compute_metrics(eval_pred, num_classes=32):
         logits, labels = eval_pred
         logits_tensor = torch.from_numpy(logits)
         
-        outputs = torch.nn.functional.interpolate(
+        outputs = F.interpolate(
             logits_tensor, size=labels.shape[-2:], mode="bilinear", align_corners=False
         )
         
@@ -112,109 +106,67 @@ def compute_metrics(eval_pred, num_classes=32):
         labels_tensor = torch.from_numpy(labels).long()
         
         
-        miou = metric(preds, labels_tensor).item()
+        miou = metric_global(preds, labels_tensor).item()
         return {"mean_iou": miou}
-    
+  
+      
 
-def evaluate_model(model, test_loader, num_classes=32, device=None):
+            
+def evaluate_model(model, test_loader, device="cpu", is_coreml=False):
     """
-    Évalue le modèle sur le jeu de test et calcule le mIoU global.
-    """
-    if device is None:
-        device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-        
-    model.to(device)
-    metric.to(device)
-    model.eval()
+    Évalue le modèle et renvoie l'IoU par classe ainsi que le mIoU global.
+    """ 
     
+    # 1. Configuration et transfert du modèle sur le périphérique
+    metric_global.to(device)
+    metric_per_class.to(device)
+    if not is_coreml:
+        model.to(device)
+        model.eval()
+    
+    # 2. Initialisation des métriques
+    metric_global.reset()
+    metric_per_class.reset()
+
+    # 3. Boucle d'évaluation sur le jeu de données
+    with torch.no_grad():
+        for batch in test_loader:
+            
+            # Extraction propre des images et des masques 
+            if isinstance(batch, dict):
+                images = batch.get("pixel_values")
+                masks = batch.get("labels").to(device).long()
+            else:
+                images, masks = batch, batch.to(device).long()
+                
+            
+            # Propagation avant (Inférence PyTorch)
+            if not is_coreml:
+                images = images.to(device)
+                output = model(images)
+                logits = output.logits if hasattr(output, 'logits') else output
+            else:
+                images = F.interpolate(images, size=(512, 512), mode='bilinear', align_corners=False)
+                np_images = images.cpu().numpy()
+                inputs = {"pixel_values": np_images}
+                predictions = model.predict(inputs)
+                output = list(predictions.keys())[0]
+                logits_np = predictions[output]
+                logits = torch.from_numpy(logits_np).to(device)
 
    
-    print("Démarrage de l'évaluation")
-    
-    with torch.no_grad():
-        for batch in test_loader:
-            if isinstance(batch, dict):
-                images = batch.get("pixel_values")
-                masks = batch.get("labels")
-            elif isinstance(batch, (list, tuple)):
-                images = batch[0]
-                masks = batch[1]
-            else:
-                raise TypeError(f"Format de batch non supporté : {type(batch)}")
-
-            images = images.to(device)
-            masks = masks.to(device).long()
             
-            outputs = model(images)
-            logits = outputs.logits if hasattr(outputs, 'logits') else outputs
-
-            upsampled_logits = F.interpolate(
-                logits, size=masks.shape[1:], mode='bilinear', align_corners=False
-            )
-            preds = torch.argmax(upsampled_logits, dim=1)
-            metric.update(preds, masks)
+            # Redimensionnement des logits à la taille originale du masque (Calcul exact)
+            upsampled = F.interpolate(logits, size=masks.shape[1:], mode='bilinear', align_corners=False)
+            preds = upsampled.argmax(dim=1)
             
-    final_miou = metric.compute().item()
-    print(f"Score mIoU Final : {final_miou * 100:.2f}%")
-    return final_miou
-
-
-def evaluate_model_per_class(model, test_loader, num_classes=32, device=None):
-    """
-    Évalue le modèle sur le jeu de test et affiche l'IoU classe par classe.
-    """
-    if device is None:
-        device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+            # Accumulation simultanée dans les deux métriques
+            metric_global.update(preds, masks)
+            metric_per_class.update(preds, masks)
+            
+    # 4. Extraction et calcul des scores finaux
+    miou = metric_global.compute().item()
+    ious = metric_per_class.compute()
         
-    model.to(device)
-    metric.to(device)
-    model.eval()
-    
-    
-    print("Démarrage de l'évaluation détaillée...")
-    
-    with torch.no_grad():
-        for batch in test_loader:
-            if isinstance(batch, dict):
-                images = batch.get("pixel_values")
-                masks = batch.get("labels")
-            elif isinstance(batch, (list, tuple)):
-                images = batch[0]
-                masks = batch[1]
-            else:
-                raise TypeError(f"Format de batch non supporté : {type(batch)}")
+    return ious.cpu().numpy(), miou
 
-            images = images.to(device)
-            masks = masks.to(device).long()
-            
-            outputs = model(images)
-            logits = outputs.logits if hasattr(outputs, 'logits') else outputs
-
-            upsampled_logits = F.interpolate(
-                logits, size=masks.shape[1:], mode='bilinear', align_corners=False
-            )
-            preds = torch.argmax(upsampled_logits, dim=1)
-            
-            # Accumulation des matrices de confusion pixel par pixel
-            metric.update(preds, masks)
-            
-    # Extraction du tenseur contenant les IoU de chaque classe
-    iou_per_class = metric.compute() # Tenseur de taille [32]
-    
-    print("\n" + "="*40)
-    print("       SCORE IoU CLASSE PAR CLASSE      ")
-    print("="*40)
-    
-    
-    for class_idx, iou_value in enumerate(iou_per_class):
-        # Convertir le tenseur en valeur Python native
-        iou_val = iou_value.item() * 100
-        print(f"Classe {class_idx:02d} : {iou_val:.2f}%")
-        
-    # Calcul manuel de la moyenne macro (mIoU global) pour vérification
-    final_miou = iou_per_class.mean().item()
-    print("="*40)
-    print(f"Score mIoU Global (Moyenne) : {final_miou * 100:.2f}%")
-    print("="*40)
-
-    return iou_per_class.cpu().numpy()

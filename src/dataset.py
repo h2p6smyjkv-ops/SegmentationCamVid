@@ -6,6 +6,12 @@ from PIL import Image
 import albumentations as A
 
 class CamVidDataset(Dataset):
+    """
+    Dataset personnalisé qui gère le chargement des paires d'images et de masques, la conversion 
+    des masques de couleur RGB vers des indices de classes utilisables par les fonctions 
+    de perte, et applique la data augmentation.
+    """
+    
     def __init__(self, images_dir, masks_dir, csv_path, processor, is_train=True):
     
         self.images_dir = images_dir
@@ -24,21 +30,21 @@ class CamVidDataset(Dataset):
                 A.RandomBrightnessContrast(p=1.0),
                 A.ColorJitter(p=1.0),
                 A.RandomShadow(p=1.0),
-            ], p=0.6),
+            ], p=0.7),
             
             # Flou ou bruit pour empêcher le surapprentissage 
             A.OneOf([
                 A.GaussianBlur(p=1.0),
                 A.GaussNoise(p=1.0),
-            ], p=0.3),
+            ], p=0.4),
         ])
 
-        # CORRECTION 1 : Définir val_transform pour éviter le plantage AttributeError
-        self.val_transform = A.Compose([
-            A.NoOp()  # Ne fait rien, garde l'image d'origine intacte
-        ])
+    
 
     def _load_color_mapping(self, csv_path):
+        """
+        Crée un dictionnaire de correspondance entre les couleurs RGB et les indices de classes.
+        """
         mapping = {}
         with open(csv_path, mode='r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
@@ -47,6 +53,9 @@ class CamVidDataset(Dataset):
         return mapping
 
     def _rgb_to_class_indices(self, mask_rgb_array):
+        """
+        Convertit un masque RGB en indices de classes (0 à 31) en utilisant le dictionnaire de correspondance.
+        """
         h, w, _ = mask_rgb_array.shape
         class_mask = np.full((h, w), 255, dtype=np.int64)
         
@@ -70,14 +79,11 @@ class CamVidDataset(Dataset):
         # Conversion des couleurs en indices (0 à 31)
         mask_indices = self._rgb_to_class_indices(mask_rgb)
 
-        # Application du pipeline adapté selon la phase
+        # Application de la data augmentation
         if self.is_train:
             augmented = self.train_transform(image=image, mask=mask_indices)
-        else:
-            augmented = self.val_transform(image=image, mask=mask_indices)
-            
-        image = augmented['image']
-        mask_indices = augmented['mask']
+            image = augmented['image']
+            mask_indices = augmented['mask']
 
         
         inputs = self.processor(
