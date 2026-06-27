@@ -45,7 +45,7 @@ Pas besoin de relancer l'entraînement complet pour tester le projet ! Je mets �
 ##  Utilisation
 
 ### 1. Installation
-Télechargez le dataset CamVid en cliquant [ici](https://google.com(https://www.kaggle.com/datasets/carlolepelaars/camvid)).
+Télechargez le dataset CamVid en cliquant [ici](https://www.kaggle.com/datasets/carlolepelaars/camvid).
 
 Installez d'abord les dépendances nécessaires au projet :
 ```bash
