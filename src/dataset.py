@@ -23,6 +23,7 @@ class CamVidDataset(Dataset):
 
         # Pipeline d'ENTRAÎNEMENT 
         self.train_transform = A.Compose([ 
+            A.Resize(512, 512),
             A.HorizontalFlip(p=0.5), 
             
             # Changements de lumière 
@@ -37,6 +38,10 @@ class CamVidDataset(Dataset):
                 A.GaussianBlur(p=1.0),
                 A.GaussNoise(p=1.0),
             ], p=0.3),
+        ])
+
+        self.val_transform = A.Compose([
+            A.Resize(height=512, width=512), 
         ])
 
     
@@ -82,8 +87,11 @@ class CamVidDataset(Dataset):
         # Application de la data augmentation
         if self.is_train:
             augmented = self.train_transform(image=image, mask=mask_indices)
-            image = augmented['image']
-            mask_indices = augmented['mask']
+        else:
+            augmented = self.val_transform(image=image, mask=mask_indices)
+            
+        image = augmented['image']
+        mask_indices = augmented['mask']
 
         
         inputs = self.processor(
