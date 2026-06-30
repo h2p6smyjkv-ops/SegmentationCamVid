@@ -54,6 +54,10 @@ class CamVidDataset(Dataset):
         with open(csv_path, mode='r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for idx, row in enumerate(reader):
+                #On ne prend pas en compte la classe 30 : Void
+                if idx == 30:
+                     mapping[(int(row['r']), int(row['g']), int(row['b']))] = 255
+                     
                 mapping[(int(row['r']), int(row['g']), int(row['b']))] = idx
         return mapping
 

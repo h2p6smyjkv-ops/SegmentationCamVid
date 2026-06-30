@@ -18,7 +18,7 @@ metric_per_class = MulticlassJaccardIndex(
 
 def dice_loss(logits, targets, num_classes, ignore_index=255):
     """
-    Calcule la Dice Loss entre les prédictions (logits) et les cibles (targets).
+    Calcule la Dice Loss.
     """
     probs = F.softmax(logits, dim=1)
     
@@ -48,7 +48,7 @@ def dice_loss(logits, targets, num_classes, ignore_index=255):
 
 def focal_loss(logits, targets, gamma=2.0, ignore_index=255):
     """
-    Calcule la Focal Loss entre les prédictions (logits) et les cibles (targets).
+    Calcule la Focal Loss.
     """
     # 1. Calcul de la Cross Entropy classique pixel par pixel (sans réduction)
     ce_loss = F.cross_entropy(
