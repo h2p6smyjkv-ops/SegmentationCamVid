@@ -77,7 +77,8 @@ python interface.py
 
 ## Mes Résultats
 
-<img width="1450" height="747" alt="ExempleSegmentation" src="https://github.com/user-attachments/assets/1cc80ae9-4783-4423-be16-4e82087ceed2" />
+<img width="640" height="358" alt="démo" src="https://github.com/user-attachments/assets/fa9c1d56-5ab1-406f-b031-b9515e52742d" />
+
 
 
 
