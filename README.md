@@ -19,11 +19,10 @@ Le projet s'appuie sur l'architecture de Transformer **SegFormer (mit-b1)**. Pou
 
 Pas besoin de relancer l'entraînement complet pour tester le projet ! Je mets à disposition mes deux meilleurs modèles entraînés. Prenez le modèle CoreML si vous avez un Macbook avec une puce M1,M2,M3,m4 ou M5, et l'autre sinon.
 
-* [Télécharger le modèle PyTorch (.pth ou HuggingFace format) 🔗](https://google.com)
-* [Télécharger le modèle optimisé CoreML (.mlpackage) 🔗](https://google.com)
-
-*Une fois téléchargé, placez le modèle dans un dossier nommé `model` à la racine du projet pour le modèle pytorch, ou laissez le tel quel pour le modèle CoreML.*
-
+* [Télécharger le modèle PyTorch](https://drive.google.com/file/d/1RcA1CBHiVqKSDdVP2KQZ0KgyndXYsyyU/view?usp=sharing)
+* [Télécharger le modèle optimisé CoreML (.mlpackage)](https://drive.google.com/file/d/16L7ud9_b-NajKaw4J3ngNHA_Mu2xiLy5/view?usp=drive_link)
+  
+*Une fois téléchargé et décompressé, placez le modèle à la racine du projet.
 ---
 
 ## Structure du Projet
